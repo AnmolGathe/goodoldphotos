@@ -39,3 +39,9 @@ services:
       # Render serves over HTTPS
       - key: COOKIE_SECURE
         value: "true"
+
+      - key: PICKER_SELECTION_LIMIT
+        value: "2000"
+
+      - key: STALE_JOB_SECONDS
+        value: "3600"
