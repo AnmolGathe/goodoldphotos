@@ -3,15 +3,18 @@ services:
     name: mygoodoldphotos
     runtime: python
     plan: free
+
     buildCommand: pip install -r requirements.txt
     startCommand: python render_start.py
-    healthCheckPath: /health
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: mygoodoldphotos-db
-          property: connectionString
 
+    healthCheckPath: /health
+
+    envVars:
+      # External PostgreSQL database (Aiven)
+      - key: DATABASE_URL
+        sync: false
+
+      # Google OAuth
       - key: GOOGLE_CLIENT_ID
         sync: false
 
@@ -21,18 +24,18 @@ services:
       - key: GOOGLE_REDIRECT_URI
         sync: false
 
+      # Application secret
       - key: APP_SECRET_KEY
         generateValue: true
 
+      # Fernet encryption key used to encrypt stored credentials
       - key: APP_ENCRYPTION_KEY
         sync: false
 
+      # Platform GitHub storage
       - key: PLATFORM_GITHUB_TOKEN
         sync: false
 
+      # Render serves over HTTPS
       - key: COOKIE_SECURE
         value: "true"
-
-databases:
-  - name: mygoodoldphotos-db
-    plan: free
