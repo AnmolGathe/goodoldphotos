@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: mygoodoldphotos
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python render_start.py
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mygoodoldphotos-db
+          property: connectionString
+
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+
+      - key: APP_SECRET_KEY
+        generateValue: true
+
+      - key: APP_ENCRYPTION_KEY
+        sync: false
+
+      - key: PLATFORM_GITHUB_TOKEN
+        sync: false
+
+      - key: COOKIE_SECURE
+        value: "true"
+
+databases:
+  - name: mygoodoldphotos-db
+    plan: free

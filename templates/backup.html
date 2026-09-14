@@ -1,0 +1,839 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro">
+  <p class="eyebrow">NEW BACKUP</p>
+  <h1>Choose what to preserve.</h1>
+  <p class="muted">
+    Add media to an existing album or create a new one.
+    Original bytes are placed in uncompressed TAR archives.
+  </p>
+</section>
+
+<div class="choices" id="backup-choices">
+
+  <section class="panel">
+    <span class="icon">◉</span>
+    <h2>Google Photos</h2>
+    <p>
+      Select photos and videos in Google’s Picker.
+      Up to {{ picker_limit }} items per selection.
+    </p>
+
+    <form id="google-form">
+
+      <label>Destination album</label>
+
+      <select
+        id="google-album-mode"
+        class="album-select"
+      >
+        <option value="new"{% if not selected_album_id %} selected{% endif %}>Create new album</option>
+        <option value="existing"{% if selected_album_id %} selected{% endif %}>Add to existing album</option>
+      </select>
+
+      <div id="google-existing-wrap" hidden>
+        <label>
+          Existing album
+          <select
+            id="google-existing-album"
+            name="album_id"
+            class="album-select"
+          >
+            {% for album in albums %}
+            <option value="{{ album.id }}"{% if album.id == selected_album_id %} selected{% endif %}>
+              {{ album.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div id="google-new-wrap">
+        <label>
+          New album name
+          <input
+            id="google-new-name"
+            required
+            name="album_name"
+            placeholder="Summer 2026"
+          >
+        </label>
+      </div>
+
+      <button
+        class="button"
+        id="google-button"
+      >
+        Open Google Photos Picker
+      </button>
+    </form>
+
+    <p
+      id="google-message"
+      class="muted"
+    ></p>
+  </section>
+
+  <section class="panel">
+    <span class="icon">↥</span>
+    <h2>Local files</h2>
+    <p>
+      Upload files from this computer.
+      They stream to temporary disk; processing happens in the worker.
+    </p>
+
+    <form id="local-form">
+
+      <label>Destination album</label>
+
+      <select
+        id="local-album-mode"
+        class="album-select"
+      >
+        <option value="new"{% if not selected_album_id %} selected{% endif %}>Create new album</option>
+        <option value="existing"{% if selected_album_id %} selected{% endif %}>Add to existing album</option>
+      </select>
+
+      <div id="local-existing-wrap" hidden>
+        <label>
+          Existing album
+          <select
+            id="local-existing-album"
+            name="album_id"
+            class="album-select"
+          >
+            {% for album in albums %}
+            <option value="{{ album.id }}"{% if album.id == selected_album_id %} selected{% endif %}>
+              {{ album.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div id="local-new-wrap">
+        <label>
+          New album name
+          <input
+            id="local-new-name"
+            required
+            name="album_name"
+            placeholder="Phone backup"
+          >
+        </label>
+      </div>
+
+      <label class="drop">
+        Choose files
+        <input
+          id="local-files"
+          name="files"
+          type="file"
+          multiple
+          required
+        >
+      </label>
+
+      <div id="names" class="muted"></div>
+
+      <div class="progress">
+        <div
+          id="upload-bar"
+          class="progress-bar"
+          style="width:0%"
+        ></div>
+      </div>
+
+      <div
+        id="upload-detail"
+        class="muted"
+      ></div>
+
+      <button
+        id="upload-button"
+        class="button"
+      >
+        Upload and queue
+      </button>
+    </form>
+
+    <p class="muted">
+      Per file limit:
+      {{ (max_upload_bytes / 1024 / 1024 / 1024)|round(2) }}
+      GB.
+    </p>
+  </section>
+</div>
+
+<section
+  class="panel live-panel"
+  id="live-progress"
+  hidden
+>
+  <div class="panel-head">
+    <div>
+      <p
+        class="eyebrow"
+        id="job-source"
+      >BACKUP</p>
+
+      <h2 id="job-title">
+        Backup in progress
+      </h2>
+    </div>
+
+    <span
+      class="status"
+      id="job-status"
+    >queued</span>
+  </div>
+
+  <div class="progress large-progress">
+    <div
+      id="overall-bar"
+      class="progress-bar"
+      style="width:0%"
+    ></div>
+  </div>
+
+  <div class="progress-row">
+    <strong id="overall-percent">0%</strong>
+    <span
+      id="overall-bytes"
+      class="muted"
+    ></span>
+  </div>
+
+  <div class="live-details">
+    <div>
+      <span class="muted">Current operation</span>
+      <strong id="job-operation">Waiting</strong>
+    </div>
+
+    <div>
+      <span class="muted">Current file</span>
+      <strong id="job-filename">—</strong>
+    </div>
+
+    <div>
+      <span class="muted">File progress</span>
+      <strong id="file-percent">0%</strong>
+    </div>
+
+    <div>
+      <span class="muted">Items</span>
+      <strong id="job-items">0 / 0</strong>
+    </div>
+
+    <div>
+      <span class="muted">Part</span>
+      <strong id="job-part">0</strong>
+    </div>
+  </div>
+
+  <div
+    id="job-message"
+    class="muted"
+  ></div>
+
+  <div
+    id="job-actions"
+    style="margin-top:18px"
+  ></div>
+</section>
+
+<script>
+const choices =
+  document.getElementById(
+    'backup-choices'
+  );
+
+const live =
+  document.getElementById(
+    'live-progress'
+  );
+
+const sourceLabel =
+  document.getElementById(
+    'job-source'
+  );
+
+const title =
+  document.getElementById(
+    'job-title'
+  );
+
+const status =
+  document.getElementById(
+    'job-status'
+  );
+
+const operation =
+  document.getElementById(
+    'job-operation'
+  );
+
+const filename =
+  document.getElementById(
+    'job-filename'
+  );
+
+const filePercent =
+  document.getElementById(
+    'file-percent'
+  );
+
+const items =
+  document.getElementById(
+    'job-items'
+  );
+
+const part =
+  document.getElementById(
+    'job-part'
+  );
+
+const overallBar =
+  document.getElementById(
+    'overall-bar'
+  );
+
+const overallPercent =
+  document.getElementById(
+    'overall-percent'
+  );
+
+const overallBytes =
+  document.getElementById(
+    'overall-bytes'
+  );
+
+const message =
+  document.getElementById(
+    'job-message'
+  );
+
+const actions =
+  document.getElementById(
+    'job-actions'
+  );
+
+function bytes(n) {
+  n = Number(n || 0);
+
+  if (!n) {
+    return '0 B';
+  }
+
+  const u = [
+    'B',
+    'KB',
+    'MB',
+    'GB',
+    'TB'
+  ];
+
+  let i = 0;
+
+  while (
+    n >= 1024 &&
+    i < u.length - 1
+  ) {
+    n /= 1024;
+    i++;
+  }
+
+  return `${n.toFixed(i ? 2 : 0)} ${u[i]}`;
+}
+
+function configureAlbumMode(
+  modeId,
+  existingWrapId,
+  newWrapId,
+  existingSelectId,
+  newNameId
+) {
+  const mode =
+    document.getElementById(
+      modeId
+    );
+
+  const existingWrap =
+    document.getElementById(
+      existingWrapId
+    );
+
+  const newWrap =
+    document.getElementById(
+      newWrapId
+    );
+
+  const existingSelect =
+    document.getElementById(
+      existingSelectId
+    );
+
+  const newName =
+    document.getElementById(
+      newNameId
+    );
+
+  function update() {
+    const existing =
+      mode.value === 'existing';
+
+    existingWrap.hidden =
+      !existing;
+
+    newWrap.hidden =
+      existing;
+
+    existingSelect.disabled =
+      !existing;
+
+    existingSelect.required =
+      existing;
+
+    newName.disabled =
+      existing;
+
+    newName.required =
+      !existing;
+
+    /*
+     * Do not submit both album_id and album_name.
+     * FastAPI will therefore know unambiguously whether the user selected
+     * an existing album or requested a new album.
+     */
+    if (existing) {
+      newName.name = '';
+      existingSelect.name = 'album_id';
+    } else {
+      existingSelect.name = '';
+      newName.name = 'album_name';
+    }
+  }
+
+  mode.addEventListener(
+    'change',
+    update
+  );
+
+  update();
+
+  return {
+    mode,
+    existingSelect,
+    newName,
+  };
+}
+
+const googleAlbum =
+  configureAlbumMode(
+    'google-album-mode',
+    'google-existing-wrap',
+    'google-new-wrap',
+    'google-existing-album',
+    'google-new-name'
+  );
+
+const localAlbum =
+  configureAlbumMode(
+    'local-album-mode',
+    'local-existing-wrap',
+    'local-new-wrap',
+    'local-existing-album',
+    'local-new-name'
+  );
+
+function showLive(
+  jobSource,
+  jobId,
+  albumId
+) {
+  choices.hidden = true;
+  live.hidden = false;
+
+  sourceLabel.textContent =
+    jobSource === 'local'
+      ? 'LOCAL FILES'
+      : 'GOOGLE PHOTOS';
+
+  title.textContent =
+    'Backup in progress';
+
+  actions.innerHTML = '';
+
+  const es =
+    new EventSource(
+      `/api/jobs/${jobId}/events`
+    );
+
+  es.onmessage =
+    (event) => {
+      const x =
+        JSON.parse(
+          event.data
+        );
+
+      const op =
+        String(
+          x.operation ||
+          x.status ||
+          'working'
+        );
+
+      const currentPct =
+        Number(
+          x.current_percent || 0
+        );
+
+      const overallPct =
+        Number(
+          x.overall_percent || 0
+        );
+
+      status.textContent =
+        String(
+          x.status ||
+          'working'
+        ).replaceAll(
+          '_',
+          ' '
+        );
+
+      operation.textContent =
+        op.replaceAll(
+          '_',
+          ' '
+        );
+
+      filename.textContent =
+        x.filename || '—';
+
+      filePercent.textContent =
+        `${currentPct.toFixed(1)}%`;
+
+      overallPercent.textContent =
+        `${overallPct.toFixed(1)}%`;
+
+      overallBar.style.width =
+        `${Math.min(
+          100,
+          Math.max(
+            0,
+            overallPct
+          )
+        )}%`;
+
+      items.textContent =
+        `${x.completed_items || 0} / ${
+          x.total_items || 0
+        }`;
+
+      part.textContent =
+        String(
+          x.current_part || 0
+        );
+
+      if (x.current_total_bytes) {
+        overallBytes.textContent =
+          `${bytes(x.current_bytes)} / ${
+            bytes(x.current_total_bytes)
+          }`;
+      } else if (x.total_bytes) {
+        overallBytes.textContent =
+          `${bytes(x.processed_bytes)} / ${
+            bytes(x.total_bytes)
+          }`;
+      } else {
+        overallBytes.textContent =
+          '';
+      }
+
+      if (x.status === 'completed') {
+        status.className =
+          'status completed';
+
+        operation.textContent =
+          'Completed';
+
+        overallBar.style.width =
+          '100%';
+
+        overallPercent.textContent =
+          '100%';
+
+        actions.innerHTML =
+          `<a class="button" href="/albums/${albumId}">Open album</a>`;
+
+        message.textContent =
+          'Backup completed successfully.';
+
+        es.close();
+
+      } else if (
+        x.status === 'failed'
+      ) {
+        status.className =
+          'status failed';
+
+        message.textContent =
+          'Backup failed. Please check the server logs for details.';
+
+        actions.innerHTML =
+          `<a class="button" href="/">Back to dashboard</a>`;
+
+        es.close();
+      }
+    };
+
+  es.onerror =
+    () => {
+      /*
+       * Do not expose internal transport errors.
+       * EventSource automatically reconnects.
+       */
+    };
+}
+
+const g =
+  document.querySelector(
+    '#google-form'
+  );
+
+const gm =
+  document.getElementById(
+    'google-message'
+  );
+
+const gb =
+  document.getElementById(
+    'google-button'
+  );
+
+g.onsubmit =
+  async (e) => {
+    e.preventDefault();
+
+    gb.disabled = true;
+
+    gm.textContent =
+      'Opening Google Photos Picker…';
+
+    try {
+      const r =
+        await fetch(
+          '/backup/google',
+          {
+            method: 'POST',
+            body: new FormData(g)
+          }
+        );
+
+      const x =
+        await r.json();
+
+      if (!r.ok) {
+        gm.textContent =
+          'Could not start Google Photos backup. Please check the server logs.';
+        gb.disabled = false;
+        return;
+      }
+
+      gm.textContent =
+        'Select your photos/videos in Google Photos…';
+
+      window.open(
+        x.picker_uri,
+        'googlePhotosPicker'
+      );
+
+      const timer =
+        setInterval(
+          async () => {
+            try {
+              const q =
+                await fetch(
+                  `/backup/google/${x.job_id}/selection-status`,
+                  {
+                    method: 'POST'
+                  }
+                );
+
+              if (!q.ok) {
+                return;
+              }
+
+              const state =
+                await q.json();
+
+              if (
+                state.status ===
+                'queued'
+              ) {
+                clearInterval(
+                  timer
+                );
+
+                gm.textContent =
+                  '';
+
+                showLive(
+                  'google',
+                  state.job_id,
+                  state.album_id ||
+                    x.album_id
+                );
+              }
+            } catch (_) {
+            }
+          },
+          1500
+        );
+
+    } catch (_) {
+      gm.textContent =
+        'Could not start Google Photos backup. Please check the server logs.';
+
+      gb.disabled = false;
+    }
+  };
+
+const l =
+  document.querySelector(
+    '#local-form'
+  );
+
+const filesInput =
+  document.querySelector(
+    '#local-files'
+  );
+
+const names =
+  document.querySelector(
+    '#names'
+  );
+
+const bar =
+  document.querySelector(
+    '#upload-bar'
+  );
+
+const detail =
+  document.querySelector(
+    '#upload-detail'
+  );
+
+const button =
+  document.querySelector(
+    '#upload-button'
+  );
+
+filesInput.onchange =
+  () => {
+    names.textContent =
+      [
+        ...filesInput.files
+      ]
+        .map(
+          f =>
+            `${f.name} (${bytes(f.size)})`
+        )
+        .join(', ');
+  };
+
+l.onsubmit =
+  (e) => {
+    e.preventDefault();
+
+    const xhr =
+      new XMLHttpRequest();
+
+    xhr.open(
+      'POST',
+      '/backup/local'
+    );
+
+    xhr.upload.onprogress =
+      (event) => {
+        if (
+          !event.lengthComputable
+        ) {
+          return;
+        }
+
+        const pct =
+          event.loaded /
+          event.total *
+          100;
+
+        bar.style.width =
+          `${pct}%`;
+
+        detail.textContent =
+          `Uploading from your computer · ${
+            pct.toFixed(1)
+          }% · ${
+            bytes(event.loaded)
+          } / ${
+            bytes(event.total)
+          }`;
+      };
+
+    xhr.onload =
+      () => {
+        button.disabled =
+          false;
+
+        try {
+          const x =
+            JSON.parse(
+              xhr.responseText
+            );
+
+          if (
+            xhr.status >= 200 &&
+            xhr.status < 300
+          ) {
+            bar.style.width =
+              '100%';
+
+            detail.textContent =
+              'Uploaded to server. Processing in background…';
+
+            showLive(
+              'local',
+              x.job_id,
+              x.album_id
+            );
+
+          } else {
+            detail.textContent =
+              'Upload failed. Please check the server logs.';
+          }
+
+        } catch (_) {
+          detail.textContent =
+            'Upload failed. Please check the server logs.';
+        }
+      };
+
+    xhr.onerror =
+      () => {
+        button.disabled =
+          false;
+
+        detail.textContent =
+          'Upload failed. Please check the server logs.';
+      };
+
+    button.disabled =
+      true;
+
+    xhr.send(
+      new FormData(l)
+    );
+  };
+</script>
+{% endblock %}

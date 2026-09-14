@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets / credentials
+.env
+credentials.json
+token.json
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime / application state
+backup_state.json
+
+# Generated/local files
+artifacts/
+downloads/
+
+# Temporary backup/archive files
+*.tar
+*.tar.gz
+*.zip
+*.part
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/

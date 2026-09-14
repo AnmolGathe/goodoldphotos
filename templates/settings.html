@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="intro">
+  <p class="eyebrow">SETTINGS</p>
+  <h1>Storage configuration</h1>
+</section>
+
+<section class="panel">
+  <h2>{{ user.storage_mode|capitalize }} GitHub storage</h2>
+  <p>{{ storage }}</p>
+  <p class="muted">Tokens are encrypted at rest and never rendered back to the browser.</p>
+
+  <form action="/settings/storage" method="post">
+    <label>
+      Storage mode
+      <select name="storage_mode">
+        <option value="platform" {% if user.storage_mode == 'platform' %}selected{% endif %}>
+          Platform storage
+        </option>
+        <option value="personal" {% if user.storage_mode == 'personal' %}selected{% endif %}>
+          My GitHub account
+        </option>
+      </select>
+    </label>
+
+    <label>
+      GitHub personal access token
+      <span class="muted">(only needed for personal storage)</span>
+      <input name="github_token" type="password" autocomplete="new-password">
+    </label>
+
+    <button class="button">Save storage settings</button>
+  </form>
+</section>
+
+<section class="panel" style="margin-top:24px;">
+  <h2>Delete account</h2>
+
+  <p>
+    This permanently erases your MyGoodOldPhotos account, all albums,
+    backup jobs, media records, and all MyGoodOldPhotos backup releases
+    stored in your configured GitHub repository.
+  </p>
+
+  <p class="muted">
+    Google Photos items are never deleted. For personal GitHub storage,
+    only MyGoodOldPhotos backup releases are removed; the GitHub repository
+    itself is not deleted.
+  </p>
+
+  <form
+    action="/account/delete"
+    method="post"
+    onsubmit="return confirm('This permanently deletes your MyGoodOldPhotos account and all MyGoodOldPhotos backups. Continue?');"
+  >
+    <label>
+      Type <strong>DELETE MY ACCOUNT</strong> to confirm
+      <input
+        name="confirmation"
+        required
+        autocomplete="off"
+        placeholder="DELETE MY ACCOUNT"
+      >
+    </label>
+
+    <button
+      class="button"
+      type="submit"
+      style="background:#a13c2d;"
+    >
+      Erase and delete account
+    </button>
+  </form>
+</section>
+{% endblock %}

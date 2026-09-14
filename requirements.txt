@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+requests
+python-dotenv
+google-auth
+google-auth-oauthlib
+google-api-python-client
+sqlalchemy
+psycopg[binary]
+itsdangerous

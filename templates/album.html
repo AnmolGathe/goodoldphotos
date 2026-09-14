@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="intro">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:24px;">
+    <div>
+      <p class="eyebrow">ALBUM</p>
+      <h1>{{ album.name }}</h1>
+      <p class="muted">
+        {{ media_count }} file{{ '' if media_count == 1 else 's' }}
+        · {{ chunks|length }} verified archive part{{ '' if chunks|length == 1 else 's' }}
+      </p>
+    </div>
+
+    <a
+      href="/backup?album_id={{ album.id }}"
+      class="button"
+      style="white-space:nowrap; margin-top:34px;"
+    >
+      Add to this album
+    </a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Archive chunks</h2>
+  </div>
+
+  {% if chunks %}
+    <table>
+      <thead>
+        <tr>
+          <th>Part</th>
+          <th>Asset</th>
+          <th>Size</th>
+          <th>SHA-256</th>
+          <th>Release</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for chunk in chunks %}
+        <tr>
+          <td>{{ chunk.part_number }}</td>
+          <td>{{ chunk.asset_name }}</td>
+          <td>{{ "{:,}".format(chunk.size) }} bytes</td>
+          <td><code>{{ chunk.sha256 }}</code></td>
+          <td>{{ chunk.release_tag }}</td>
+          <td>
+            <button
+              class="button download-button"
+              type="button"
+              data-album-id="{{ album.id }}"
+              data-asset-id="{{ chunk.github_asset_id }}"
+            >
+              Download TAR
+            </button>
+            ·
+            <button
+              class="button restore-button"
+              type="button"
+              data-album-id="{{ album.id }}"
+              data-asset-id="{{ chunk.github_asset_id }}"
+            >
+              Restore ZIP
+            </button>
+          </td>
+        </tr>
+        <tr id="download-row-{{ chunk.github_asset_id }}" hidden>
+          <td colspan="6">
+            <div class="download-progress">
+              <div class="download-progress-head">
+                <strong id="download-operation-{{ chunk.github_asset_id }}">Preparing...</strong>
+                <span id="download-percent-{{ chunk.github_asset_id }}">0%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-bar" id="download-bar-{{ chunk.github_asset_id }}" style="width:0%"></div>
+              </div>
+              <div class="download-progress-meta">
+                <span id="download-bytes-{{ chunk.github_asset_id }}">0 B / 0 B</span>
+                <span id="download-message-{{ chunk.github_asset_id }}">Preparing download...</span>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <p class="muted">
+      Download TAR preserves the verified archive. Restore ZIP extracts and
+      verifies every media file before returning it.
+    </p>
+  {% else %}
+    <div class="empty">
+      This backup is queued or still being processed.
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Delete album</h2>
+  <p class="muted">
+    This removes only this app’s GitHub assets and records. It never deletes
+    items from Google Photos.
+  </p>
+  <form action="/albums/{{ album.id }}/delete" method="post">
+    <label>
+      Type <strong>{{ album.name }}</strong> to confirm
+      <input name="confirmation" required>
+    </label>
+    <button class="button" type="submit">Delete album</button>
+  </form>
+</section>
+
+<script>
+(function () {
+  const active = new Map();
+
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!bytes) return "0 B";
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let n = bytes;
+    let i = 0;
+
+    while (
+      n >= 1024 &&
+      i < units.length - 1
+    ) {
+      n /= 1024;
+      i++;
+    }
+
+    return `${n.toFixed(i ? 2 : 0)} ${units[i]}`;
+  }
+
+  function setProgress(assetId, data, kind) {
+    const row = document.getElementById(
+      `download-row-${assetId}`
+    );
+
+    const operation = document.getElementById(
+      `download-operation-${assetId}`
+    );
+
+    const percent = document.getElementById(
+      `download-percent-${assetId}`
+    );
+
+    const bar = document.getElementById(
+      `download-bar-${assetId}`
+    );
+
+    const bytes = document.getElementById(
+      `download-bytes-${assetId}`
+    );
+
+    const message = document.getElementById(
+      `download-message-${assetId}`
+    );
+
+    if (!row) return;
+
+    row.hidden = false;
+
+    const p = Math.max(
+      0,
+      Math.min(
+        100,
+        Number(data.percent || 0)
+      )
+    );
+
+    const isZip = kind === "zip";
+
+    const operationText =
+      data.operation === "fetching"
+        ? "Downloading from storage"
+        : data.operation === "verifying"
+          ? "Verifying archive"
+          : data.operation === "creating_zip"
+            ? "Creating ZIP"
+            : data.operation === "sending"
+              ? "Sending to browser"
+              : data.operation === "complete"
+                ? "Complete"
+                : "Preparing";
+
+    operation.textContent =
+      isZip
+        ? `Restore ZIP · ${operationText}`
+        : operationText;
+
+    percent.textContent =
+      `${p.toFixed(1)}%`;
+
+    bar.style.width = `${p}%`;
+
+    bytes.textContent =
+      `${formatBytes(data.current)} / ` +
+      `${formatBytes(data.current_total)}`;
+
+    message.textContent =
+      data.message || "";
+
+    if (data.status === "completed") {
+      percent.textContent = "100%";
+      bar.style.width = "100%";
+      operation.textContent =
+        isZip
+          ? "Download complete"
+          : "Download complete";
+
+      bytes.textContent =
+        `${formatBytes(data.current_total)} / ` +
+        `${formatBytes(data.current_total)}`;
+
+      message.textContent =
+        "Download complete.";
+    }
+
+    if (data.status === "failed") {
+      operation.textContent =
+        isZip
+          ? "Restore ZIP failed"
+          : "Download failed";
+
+      message.textContent =
+        "Download failed.";
+    }
+  }
+
+  async function runDownload(
+    button,
+    kind
+  ) {
+    const albumId =
+      button.dataset.albumId;
+
+    const assetId =
+      button.dataset.assetId;
+
+    const isZip = kind === "zip";
+
+    button.disabled = true;
+    button.textContent =
+      isZip
+        ? "Preparing ZIP..."
+        : "Preparing...";
+
+    try {
+      const endpoint =
+        isZip
+          ? `/api/albums/${albumId}/chunks/${assetId}/restore/start`
+          : `/api/albums/${albumId}/chunks/${assetId}/download/start`;
+
+      const response = await fetch(
+        endpoint,
+        {
+          method: "POST",
+          headers: {
+            "Accept": "application/json"
+          }
+        }
+      );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          isZip
+            ? "Restore could not be started."
+            : "Download could not be started."
+        );
+      }
+
+      const token = data.token;
+
+      setProgress(
+        assetId,
+        {
+          status: "running",
+          operation: "starting",
+          percent: 0,
+          current: 0,
+          current_total: 0,
+          message:
+            isZip
+              ? "Preparing ZIP..."
+              : "Preparing download..."
+        },
+        kind
+      );
+
+      const events =
+        new EventSource(
+          `/api/albums/download-progress/${token}`
+        );
+
+      events.onmessage =
+        function (event) {
+          const progress =
+            JSON.parse(
+              event.data
+            );
+
+          setProgress(
+            assetId,
+            progress,
+            kind
+          );
+
+          if (
+            progress.status ===
+              "completed" ||
+            progress.status ===
+              "failed"
+          ) {
+            events.close();
+
+            button.disabled = false;
+
+            button.textContent =
+              isZip
+                ? "Restore ZIP"
+                : "Download TAR";
+          }
+        };
+
+      events.onerror =
+        function () {
+          events.close();
+        };
+
+      const iframe =
+        document.createElement(
+          "iframe"
+        );
+
+      iframe.style.display =
+        "none";
+
+      const path =
+        isZip
+          ? `/api/albums/${albumId}/chunks/${assetId}/restore?token=${encodeURIComponent(token)}`
+          : `/api/albums/${albumId}/chunks/${assetId}/download?token=${encodeURIComponent(token)}`;
+
+      iframe.src = path;
+
+      document.body.appendChild(
+        iframe
+      );
+
+      active.set(
+        token,
+        {
+          events,
+          iframe
+        }
+      );
+    } catch (error) {
+      setProgress(
+        assetId,
+        {
+          status: "failed",
+          operation: "failed",
+          percent: 0,
+          current: 0,
+          current_total: 0,
+          message:
+            isZip
+              ? "Restore ZIP failed."
+              : "Download failed."
+        },
+        kind
+      );
+
+      button.disabled = false;
+
+      button.textContent =
+        isZip
+          ? "Restore ZIP"
+          : "Download TAR";
+    }
+  }
+
+  document
+    .querySelectorAll(
+      ".download-button"
+    )
+    .forEach((button) => {
+      button.addEventListener(
+        "click",
+        () => runDownload(
+          button,
+          "tar"
+        )
+      );
+    });
+
+  document
+    .querySelectorAll(
+      ".restore-button"
+    )
+    .forEach((button) => {
+      button.addEventListener(
+        "click",
+        () => runDownload(
+          button,
+          "zip"
+        )
+      );
+    });
+})();
+</script>
+{% endblock %}
