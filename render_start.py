@@ -16,7 +16,8 @@ def main() -> int:
     """
 
     env = os.environ.copy()
-
+    env["SKIP_DB_INIT"] = "true"
+    
     # Keep the worker and web process in the same application directory.
     project_dir = Path(__file__).resolve().parent
     os.chdir(project_dir)

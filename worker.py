@@ -180,7 +180,9 @@ def wait_for_notification(sock):
         process_queued_jobs()
 
 def main():
-    init_db()
+    if os.getenv("SKIP_DB_INIT", "").lower() != "true":
+        init_db()
+        
     recovered = recover_stale_jobs(int(os.getenv("STALE_JOB_SECONDS", "3600")))
     log("MyGoodOldPhotos worker started.")
     if recovered:
