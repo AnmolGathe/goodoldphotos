@@ -660,9 +660,15 @@ def init_db():
     schema additions required by the current application.
     """
 
+    print("[db] Starting database initialization.", flush=True)
+
+    print("[db] Creating missing tables...", flush=True)
     Base.metadata.create_all(
         bind=engine
     )
+    print("[db] Tables ready.", flush=True)
+
+    print("[db] Running schema compatibility checks...", flush=True)
 
     _sqlite_add_missing_columns()
     _ensure_indexes()
