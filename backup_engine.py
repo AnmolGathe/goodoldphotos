@@ -1253,11 +1253,21 @@ def run_backup_job(
                         job.total_bytes = total_value
                     progress_reporter.update(operation="downloading", filename=_filename, current=count, current_total=_expected, processed=_base, total=job.total_bytes)
                 progress_reporter.update(operation="downloading", filename=filename, current=0, current_total=current_expected, processed=download_base, total=job.total_bytes, force=True)
-                downloaded = download_media_item(
-                    google,
-                    media_item,
-                    destination,
-                    progress_callback=on_download,
+
+                download_start = time.perf_counter()
+
+                downloaded = download_media_item(google, media_item, destination,progress_callback=on_download)
+
+                download_elapsed = time.perf_counter() - download_start
+                download_size_mb = int(downloaded.get("size") or 0) / (1024 * 1024)
+                download_speed = download_size_mb / download_elapsed if download_elapsed > 0 else 0
+
+                logger.info(
+                    "Google download: %s | %.2f MB | %.2f s | %.2f MB/s",
+                    filename,
+                    download_size_mb,
+                    download_elapsed,
+                    download_speed,
                 )
 
                 create_or_update_media_rows(
@@ -1361,11 +1371,25 @@ def run_backup_job(
                 def on_upload(count, _asset=chunk_info["asset_name"], _processed=processed_before_upload):
                     progress_reporter.update(operation="uploading", filename=_asset, current=count, current_total=archive_size_for_progress, processed=_processed, total=max(job.total_bytes, _processed + archive_size_for_progress))
                 progress_reporter.update(operation="uploading", filename=chunk_info["asset_name"], current=0, current_total=archive_size_for_progress, processed=processed_before_upload, total=max(job.total_bytes, processed_before_upload + archive_size_for_progress), force=True)
+                upload_start = time.perf_counter()
+
                 release, asset = github.upload_asset(
                     github.get_current_release(album.name),
                     archive_path,
                     chunk_info["asset_name"],
                     progress_callback=on_upload,
+                )
+                
+                upload_elapsed = time.perf_counter() - upload_start
+                upload_size_mb = archive_size_for_progress / (1024 * 1024)
+                upload_speed = upload_size_mb / upload_elapsed if upload_elapsed > 0 else 0
+                
+                logger.info(
+                    "GitHub upload: %s | %.2f MB | %.2f s | %.2f MB/s",
+                    chunk_info["asset_name"],
+                    upload_size_mb,
+                    upload_elapsed,
+                    upload_speed,
                 )
 
                 persist_uploaded_chunk(
