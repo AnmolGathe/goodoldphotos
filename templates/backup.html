@@ -616,6 +616,18 @@ g.onsubmit =
   async (e) => {
     e.preventDefault();
 
+    const pickerWindow =
+      window.open(
+        '',
+        'googlePhotosPicker'
+      );
+
+    if (!pickerWindow) {
+      gm.textContent =
+        'Please allow popups for this site, then try again.';
+      return;
+    }
+
     gb.disabled = true;
 
     gm.textContent =
@@ -635,8 +647,11 @@ g.onsubmit =
         await r.json();
 
       if (!r.ok) {
+        pickerWindow.close();
+
         gm.textContent =
           'Could not start Google Photos backup. Please check the server logs.';
+
         gb.disabled = false;
         return;
       }
@@ -644,10 +659,8 @@ g.onsubmit =
       gm.textContent =
         'Select your photos/videos in Google Photos…';
 
-      window.open(
-        x.picker_uri,
-        'googlePhotosPicker'
-      );
+      pickerWindow.location.href =
+        x.picker_uri;
 
       const timer =
         setInterval(
@@ -693,12 +706,16 @@ g.onsubmit =
         );
 
     } catch (_) {
+      pickerWindow.close();
+
       gm.textContent =
         'Could not start Google Photos backup. Please check the server logs.';
 
       gb.disabled = false;
     }
   };
+
+
 
 const l =
   document.querySelector(
