@@ -447,4 +447,5 @@ GitHub is the durable storage location for the actual backup files.
 ## Hosting
 - Render for application: https://render.com/ -> Enter all the secrets in its env variables and not in any files
 - Aiven for DB: https://console.aiven.io/ -> Create a project for PostgreSQL eg CEO-rishikumar.
+- google client ID: https://console.cloud.google.com/
 - created one more github account which contains all the repositories eg CEO-rishikumar.
