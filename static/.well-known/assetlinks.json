@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "org.goodoldphotos.androidpoc",
+      "sha256_cert_fingerprints": [
+        "6543B73D160CB7DEA278E1AC44EDB9EC34C4A486B9095A2A15BF1639F9CAD4F4"
+      ]
+    }
+  }
+]

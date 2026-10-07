@@ -31,3 +31,10 @@ downloads/
 .DS_Store
 .vscode/
 .idea/
+
+# Android build artifacts
+android-poc/.gradle/
+android-poc/build/
+android-poc/app/build/
+*.apk
+*.aab

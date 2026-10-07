@@ -72,6 +72,71 @@ def utcnow():
 
 
 # ============================================================
+# Android OAuth transaction
+# ============================================================
+
+class AndroidOAuthTransaction(Base):
+    __tablename__ = "android_oauth_transactions"
+
+    state_hash = Column(
+        String(64),
+        primary_key=True,
+    )
+
+    code_challenge = Column(
+        String(43),
+        nullable=False,
+    )
+
+    expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+
+class AndroidOAuthHandoff(Base):
+    __tablename__ = "android_oauth_handoffs"
+
+    code_hash = Column(
+        String(64),
+        primary_key=True,
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    code_challenge = Column(
+        String(43),
+        nullable=True,
+    )
+
+    expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    redeemed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+# ============================================================
 # User
 # ============================================================
 
@@ -556,6 +621,13 @@ def _sqlite_add_missing_columns():
                 "DATETIME"
             ),
         },
+        "android_oauth_transactions": {
+            "expires_at": ("DATETIME"),
+            "completed_at": ("DATETIME"),
+        },
+        "android_oauth_handoffs": {
+            "code_challenge": ("VARCHAR(43)"),
+        },
         "backup_jobs": {
             "total_bytes": ("INTEGER NOT NULL DEFAULT 0"),
             "processed_bytes": ("INTEGER NOT NULL DEFAULT 0"),
@@ -606,6 +678,23 @@ def _sqlite_add_missing_columns():
                         f"{column_type}"
                     )
                 )
+
+        if "android_oauth_transactions" in table_columns:
+            connection.execute(
+                text(
+                    "UPDATE android_oauth_transactions "
+                    "SET expires_at = datetime(created_at, '+10 minutes') "
+                    "WHERE expires_at IS NULL"
+                )
+            )
+        if "android_oauth_handoffs" in table_columns:
+            connection.execute(
+                text(
+                    "UPDATE android_oauth_handoffs "
+                    "SET code_challenge = '' "
+                    "WHERE code_challenge IS NULL"
+                )
+            )
 
 
 def _ensure_indexes():
@@ -679,6 +768,27 @@ def init_db():
         # Compatibility migration for installations created before job source
         # was explicit. PostgreSQL supports IF NOT EXISTS atomically.
         with engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE android_oauth_transactions "
+                "ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE"
+            ))
+            connection.execute(text(
+                "ALTER TABLE android_oauth_transactions "
+                "ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE"
+            ))
+            connection.execute(text(
+                "UPDATE android_oauth_transactions "
+                "SET expires_at = created_at + INTERVAL '10 minutes' "
+                "WHERE expires_at IS NULL"
+            ))
+            connection.execute(text(
+                "ALTER TABLE android_oauth_handoffs "
+                "ADD COLUMN IF NOT EXISTS code_challenge VARCHAR(43)"
+            ))
+            connection.execute(text(
+                "UPDATE android_oauth_handoffs "
+                "SET code_challenge = '' WHERE code_challenge IS NULL"
+            ))
             postgres_columns = {
                 "source": "VARCHAR(32) NOT NULL DEFAULT 'local'",
                 "picker_session_id": "VARCHAR(255)",

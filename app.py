@@ -1,17 +1,21 @@
 """Web application. Requests authenticate, validate and queue; worker.py moves bytes."""
 from __future__ import annotations
-import hashlib, os, shutil, tempfile, uuid
+import base64, binascii, hashlib, os, re, secrets, shutil, tempfile, uuid
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from dotenv import load_dotenv
+import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from sqlalchemy import update
 from starlette.middleware.sessions import SessionMiddleware
 from auth import create_authorization_url, encrypt_credentials, encrypt_string, exchange_code_for_credentials, get_google_user_info
 from backup_engine import GITHUB_MAX_ASSET_BYTES, estimate_tar_size, sanitize_album_name, sanitize_filename
-from database import Album, BackupJob, Chunk, MediaItem, SessionLocal, User, init_db
+from database import AndroidOAuthHandoff, AndroidOAuthTransaction, Album, BackupJob, Chunk, MediaItem, SessionLocal, User, init_db, utcnow
 from album_routes import router as album_api_router
 from worker_notify import notify_worker
 
@@ -24,6 +28,7 @@ PICKER_LIMIT = min(2000, max(1, int(os.getenv("PICKER_SELECTION_LIMIT", "2000"))
 app = FastAPI(title=APP_NAME, version="2.0.0")
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY, session_cookie="mygoodoldphotos_session", max_age=2592000, same_site="lax", https_only=os.getenv("COOKIE_SECURE", "false").lower() == "true")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/.well-known", StaticFiles(directory="static/.well-known"), name="well-known")
 templates = Jinja2Templates(directory="templates")
 app.include_router(album_api_router)
 
@@ -32,6 +37,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 import logging
 logger = logging.getLogger("mygoodoldphotos")
+RENDER_ANDROID_REDEEM_URL = (
+    "https://mygoodoldphotos.onrender.com/auth/google/android/redeem"
+)
+
+
+class AndroidHandoffRedemption(BaseModel):
+    code: str = Field(min_length=43, max_length=43)
+    code_verifier: str = Field(min_length=43, max_length=43)
 
 @app.exception_handler(Exception)
 async def unhandled_exception(request: Request, exc: Exception):
@@ -158,22 +171,258 @@ def google_login(request: Request):
         return RedirectResponse(start_url, status_code=307)
     return RedirectResponse(create_authorization_url(request))
 
+def _valid_android_code_challenge(challenge: str) -> bool:
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge) is None:
+        return False
+
+    try:
+        decoded = base64.b64decode(
+            challenge + "=",
+            altchars=b"-_",
+            validate=True,
+        )
+    except (binascii.Error, ValueError):
+        return False
+
+    return (
+        len(decoded) == 32
+        and base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+        == challenge
+    )
+
+
+@app.get("/auth/google/android/start")
+def google_android_login(
+    request: Request,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+):
+    if code_challenge is None:
+        raise HTTPException(400, "Missing code_challenge.")
+    if not _valid_android_code_challenge(code_challenge):
+        raise HTTPException(400, "Invalid code_challenge.")
+    if code_challenge_method != "S256":
+        raise HTTPException(400, "code_challenge_method must be S256.")
+
+    authorization_url = create_authorization_url(request)
+    oauth_state = request.session.get("google_oauth_state")
+    if not isinstance(oauth_state, str) or not oauth_state:
+        raise RuntimeError("OAuth authorization URL did not create session state.")
+
+    state_hash = hashlib.sha256(oauth_state.encode("utf-8")).hexdigest()
+    transaction = AndroidOAuthTransaction(
+        state_hash=state_hash,
+        code_challenge=code_challenge,
+        expires_at=utcnow() + timedelta(minutes=10),
+    )
+    db = SessionLocal()
+    try:
+        db.add(transaction)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    request.session["android_oauth_state_hash"] = state_hash
+    return RedirectResponse(authorization_url)
+
 @app.get("/auth/google/callback")
 def google_callback(request: Request, code: str = "", state: str = ""):
     if not code or not state: raise HTTPException(400, "Google did not return an authorization response.")
     credentials = exchange_code_for_credentials(request, code, state); info = get_google_user_info(credentials)
     subject, email = info.get("subject_id"), info.get("email")
     if not subject or not email: raise HTTPException(400, "Google did not return a usable account identity.")
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    android_state_hash = request.session.get("android_oauth_state_hash")
+    is_android_login = (
+        isinstance(android_state_hash, str)
+        and secrets.compare_digest(android_state_hash, state_hash)
+    )
     db = SessionLocal()
     try:
+        if is_android_login:
+            transaction = db.get(AndroidOAuthTransaction, state_hash)
+            consumed = db.execute(
+                update(AndroidOAuthTransaction)
+                .where(
+                    AndroidOAuthTransaction.state_hash == state_hash,
+                    AndroidOAuthTransaction.expires_at > utcnow(),
+                    AndroidOAuthTransaction.completed_at.is_(None),
+                )
+                .values(completed_at=utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if consumed.rowcount != 1:
+                db.rollback()
+                raise HTTPException(
+                    400,
+                    "Android OAuth transaction is missing, expired, or already completed.",
+                )
+            if transaction is None:
+                db.rollback()
+                raise HTTPException(
+                    400,
+                    "Android OAuth transaction is missing, expired, or already completed.",
+                )
+
         user = db.query(User).filter(User.google_subject_id == subject).first()
         if not user:
             user = User(google_subject_id=subject, email=email, email_prefix=email.split("@", 1)[0], display_name=info.get("name") or email, storage_mode="platform"); db.add(user)
         else: user.email, user.display_name = email, info.get("name") or user.display_name
-        user.encrypted_google_token = encrypt_credentials(credentials); db.commit(); db.refresh(user)
+        user.encrypted_google_token = encrypt_credentials(credentials)
+        if is_android_login:
+            db.flush()
+            handoff_code = base64.urlsafe_b64encode(
+                secrets.token_bytes(32)
+            ).rstrip(b"=").decode("ascii")
+            now = utcnow()
+            db.add(
+                AndroidOAuthHandoff(
+                    code_hash=hashlib.sha256(handoff_code.encode("ascii")).hexdigest(),
+                    user_id=user.id,
+                    code_challenge=transaction.code_challenge,
+                    expires_at=now + timedelta(minutes=5),
+                )
+            )
+        db.commit()
+        if not is_android_login:
+            db.refresh(user)
         request.session.clear(); request.session["user_id"] = user.id
     finally: db.close()
+    if is_android_login:
+        return RedirectResponse(
+            "https://mygoodoldphotos.onrender.com/android/oauth/callback?"
+            f"code={handoff_code}",
+            303,
+        )
     return RedirectResponse("/", 303)
+
+@app.get("/android/oauth/callback", response_class=HTMLResponse)
+def android_oauth_callback():
+    return HTMLResponse(
+        "<!doctype html><html><body>Android authentication handoff received.</body></html>"
+    )
+
+@app.post("/auth/google/android/redeem")
+def redeem_android_handoff(payload: AndroidHandoffRedemption):
+    if (re.fullmatch(r"[A-Za-z0-9_-]{43}", payload.code) is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", payload.code_verifier) is None):
+        raise HTTPException(400, "Invalid, expired, or already redeemed handoff.")
+
+    code_hash = hashlib.sha256(payload.code.encode("ascii")).hexdigest()
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(payload.code_verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    now = utcnow()
+
+    db = SessionLocal()
+    try:
+        result = (
+            db.query(AndroidOAuthHandoff, User)
+            .join(User, AndroidOAuthHandoff.user_id == User.id)
+            .filter(
+                AndroidOAuthHandoff.code_hash == code_hash,
+                AndroidOAuthHandoff.expires_at > now,
+                AndroidOAuthHandoff.redeemed_at.is_(None),
+            )
+            .first()
+        )
+        if result is None:
+            raise HTTPException(400, "Invalid, expired, or already redeemed handoff.")
+
+        handoff, user = result
+        if (not handoff.code_challenge
+                or not secrets.compare_digest(handoff.code_challenge, challenge)):
+            raise HTTPException(400, "Invalid, expired, or already redeemed handoff.")
+
+        consumed = db.execute(
+            update(AndroidOAuthHandoff)
+            .where(
+                AndroidOAuthHandoff.code_hash == code_hash,
+                AndroidOAuthHandoff.expires_at > now,
+                AndroidOAuthHandoff.redeemed_at.is_(None),
+            )
+            .values(redeemed_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if consumed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(400, "Invalid, expired, or already redeemed handoff.")
+
+        response_user = {
+            "google_subject_id": user.google_subject_id,
+            "email": user.email,
+            "display_name": user.display_name,
+        }
+        db.commit()
+        return {"user": response_user}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@app.post("/auth/android/redeem")
+def redeem_android_handoff_locally(
+    request: Request,
+    payload: AndroidHandoffRedemption,
+):
+    try:
+        response = requests.post(
+            RENDER_ANDROID_REDEEM_URL,
+            json={
+                "code": payload.code,
+                "code_verifier": payload.code_verifier,
+            },
+            timeout=(5, 15),
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Android OAuth handoff redemption request failed.")
+        raise HTTPException(502, "Unable to redeem Android sign-in.") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(502, "Android sign-in handoff was rejected.")
+
+    try:
+        user_data = response.json()["user"]
+        subject = user_data["google_subject_id"]
+        email = user_data["email"]
+        display_name = user_data.get("display_name") or email
+        if not all(isinstance(value, str) and value for value in (subject, email, display_name)):
+            raise ValueError("Missing user identity.")
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(502, "Android sign-in response was invalid.")
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.google_subject_id == subject).first()
+        if user is None:
+            user = User(
+                google_subject_id=subject,
+                email=email,
+                email_prefix=email.split("@", 1)[0],
+                display_name=display_name,
+                storage_mode="platform",
+            )
+            db.add(user)
+        else:
+            user.email = email
+            user.display_name = display_name
+        db.commit()
+        request.session.clear()
+        request.session["user_id"] = user.id
+        return {"status": "ok"}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 @app.post("/backup/local")
 def queue_local_backup(
